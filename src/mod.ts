@@ -231,17 +231,21 @@ type ReplaceLastNode<S1, N> = S1 extends State<
     : never
   : never;
 
+/**
+ * ############## Parsers
+ */
+
 type Char = "_Char";
-type _Char<What extends string, S> = Read<S> extends infer R
+type _Char<What extends [string], S> = Read<S> extends infer R
   ? R extends [infer Next, infer Token]
     ? Next extends State<infer _, infer __, infer ___>
-      ? Token extends What
+      ? Token extends What[0]
         ? Merge<
             Next,
             {
               tree: [
                 ...Next["tree"],
-                Node<"char", What, Dec<Next["idx"]>, Next["idx"]>
+                Node<"char", What[0], Dec<Next["idx"]>, Next["idx"]>
               ];
             }
           >
@@ -251,7 +255,7 @@ type _Char<What extends string, S> = Read<S> extends infer R
               errors: [
                 ...Next["errors"],
                 Error<
-                  `Unable to parse Char<'${What}'>, found '${Print<Token>}'`,
+                  `Unable to parse Char<'${What[0]}'>, found '${Print<Token>}'`,
                   Dec<Next["idx"]>,
                   Next["idx"]
                 >
@@ -260,26 +264,26 @@ type _Char<What extends string, S> = Read<S> extends infer R
           >
       : S
     : never
-  : `Unexpected error in Char<S, ${What}>`;
+  : `Unexpected error in Char<S, ${What[0]}>`;
 
-type _cc = _Char<"a", State<"">>;
+type _cc = _Char<["a"], State<"">>;
 
 type Str = "_Str";
-type _Str<What extends string, S> = S extends State<
+type _Str<What extends [string], S> = S extends State<
   infer _,
   infer __,
   infer ___
 >
-  ? Read<S, Split<What>["length"]> extends infer R
+  ? Read<S, Split<What[0]>["length"]> extends infer R
     ? R extends [infer Next, infer Token]
       ? Next extends State<infer _, infer __, infer ___>
-        ? Token extends What
+        ? Token extends What[0]
           ? Merge<
               Next,
               {
                 tree: [
                   ...Next["tree"],
-                  Node<"str", What, S["idx"], Next["idx"]>
+                  Node<"str", What[0], S["idx"], Next["idx"]>
                 ];
               }
             >
@@ -289,7 +293,7 @@ type _Str<What extends string, S> = S extends State<
                 errors: [
                   ...Next["errors"],
                   Error<
-                    `Unable to parse Str<'${What}'>, found '${Print<Token>}'`,
+                    `Unable to parse Str<'${What[0]}'>, found '${Print<Token>}'`,
                     S["idx"],
                     Next["idx"]
                   >
@@ -298,19 +302,19 @@ type _Str<What extends string, S> = S extends State<
             >
         : S
       : never
-    : `Unexpected error in Char<S, ${What}>`
+    : `Unexpected error in Char<S, ${What[0]}>`
   : never;
 
 type Digit = "_Digit";
-type _Digit<What extends Digits, S> = S extends State<
+type _Digit<What extends [Digits], S> = S extends State<
   infer _s,
   infer __s,
   infer ___s,
   infer ____s
 >
-  ? P<[Char, What], S> extends infer R
+  ? $<[Char, What], S> extends infer R
     ? R extends State<infer _s, infer __s, infer ___s, infer ____s>
-      ? ReplaceLastNode<R, Node<"digit", What, S["idx"], R["idx"]>>
+      ? ReplaceLastNode<R, Node<"digit", What[0], S["idx"], R["idx"]>>
       : never
     : never
   : never;
@@ -332,31 +336,47 @@ type _Eof<S> = S extends State<infer Input, infer Idx, infer _s, infer __s>
       >
   : never;
 
-type Parser<What extends string = "", S = never> = {
-  _Char: _Char<What, S>;
-  _Digit: What extends Digits ? _Digit<What, S> : never;
-  _Str: _Str<What, S>;
+type Parser<S = never, What extends unknown[] = []> = {
+  _Char: What extends [string] ? _Char<What, S> : never;
+  _Digit: What extends [Digits] ? _Digit<What, S> : never;
+  _Str: What extends [string] ? _Str<What, S> : never;
   _Eof: _Eof<S>;
 };
 
-type P<P extends [keyof Parser, string], S> = S extends State<
+type EncodedParser<T extends keyof Parser = keyof Parser> =
+  | [T, unknown[]] // Multi argument parser
+  | [T] // No argument parser
+  | [T, unknown] // Single argument parser
+  | T; // No argument parser short-hand
+
+type $<P extends EncodedParser, S> = S extends State<
   infer _s,
   infer __s,
   infer ___s,
   infer ____s
 >
-  ? Parser<P[1], S>[P[0]]
-  : "failed to decode parser";
+  ? P extends keyof Parser
+    ? Parser<S>[P]
+    : P extends [infer key, infer args]
+    ? key extends keyof Parser
+      ? args extends unknown[]
+        ? Parser<S, args>[key]
+        : args extends unknown
+        ? Parser<S, [args]>[key]
+        : never
+      : `Invalid Parser ${Print<key>}`
+    : "Failed to decode parser"
+  : never;
 
-type _pfromt = P<[Char, "a"], State<`abc123`>>;
+type _pfromt = $<[Char, ["a"]], State<`abc123`>>;
 
 type Alt = "_Alt";
 type _Alt<
-  P1 extends [keyof Parser, string],
-  P2 extends [keyof Parser, string],
+  P1 extends EncodedParser,
+  P2 extends EncodedParser,
   S,
-  D1 = P<P1, S>,
-  D2 = P<P2, S>
+  D1 = $<P1, S>,
+  D2 = $<P2, S>
 > = S extends State<infer _s, infer __s, infer ___s, infer ____s>
   ? D1 extends State<infer _d1, infer __d1, infer ___d1, infer ____d1>
     ? D2 extends State<infer _d2, infer __d2, infer ___d2, infer ____d1>
@@ -384,11 +404,11 @@ type _Alt<
 
 type ManyTill = "_ManyTill";
 type _ManyTill<
-  P1 extends [keyof Parser, string],
-  P2 extends [keyof Parser, string],
+  P1 extends EncodedParser,
+  P2 extends EncodedParser,
   S,
-  D1 = P<P1, S>,
-  D2 = P<P2, S>
+  D1 = $<P1, S>,
+  D2 = $<P2, S>
 > = {
   end: D2;
   parserFail: S extends State<infer _s, infer __s, infer ___s, infer ____s>
@@ -426,14 +446,50 @@ type _ManyTill<
     : never
   : never];
 
-type _eof = P<[Eof, ""], P<[Char, "a"], State<"a">>>;
+type Combinator<S = never, What extends EncodedParser[] = []> = {
+  _Alt: What extends [infer P1, infer P2]
+    ? P1 extends EncodedParser
+      ? P2 extends EncodedParser
+        ? _Alt<P1, P2, S>
+        : never
+      : never
+    : never;
+  _ManyTill: What extends [infer P1, infer P2]
+    ? P1 extends EncodedParser
+      ? P2 extends EncodedParser
+        ? _ManyTill<P1, P2, S>
+        : never
+      : never
+    : never;
+};
+
+type EncodedCombinator<T extends keyof Combinator = keyof Combinator> =
+  | [T, EncodedParser[]];
+
+type $$<C extends EncodedCombinator, S> = S extends State<
+  infer _s,
+  infer __s,
+  infer ___s,
+  infer ____s
+>
+  ? C extends [infer key, infer parsers]
+    ? key extends keyof Combinator
+      ? parsers extends EncodedParser[]
+        ? Combinator<S, parsers>[key]
+        : `Invalid combinator ${Print<key>}`
+      : "Failed to decode combinator"
+    : never
+  : never;
+
+type _eof = $<Eof, $<[Char, "a"], State<"a">>>;
 
 type _s = State<`aaabccc`>;
-type _aaab = _ManyTill<[Char, "a"], [Char, "b"], _s>;
-type _m = P<[Char, "c"], _aaab>;
+type _aaab = $<[Char, "c"], $$<[ManyTill, [[Char, "a"], [Char, "b"]]], _s>>;
+
+type _m = $<[Char, "c"], _aaab>;
 
 type _m2 = State<`cc`>;
-type _x = _ManyTill<[Char, "c"], [Eof, ""], _m2>;
+type _x = $$<[ManyTill, [[Char, "c"], Eof]], _m2>;
 
 /* type _many = ManyTill<
     P<[Char, "c"], ManyTill<[Char, "a"], [Char, "b"], >>,
